@@ -34,7 +34,7 @@ Perfect for sending **Eid greetings**, **Ramadan wishes**, **holiday messages**,
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/rayl999/whatsapp-bulk-sender.git
+git clone https://github.com/rayl999/whatsapp-eid
 cd whatsapp-bulk-sender
 npm install
 ```
