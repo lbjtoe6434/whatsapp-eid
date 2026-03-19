@@ -1,0 +1,9 @@
+node_modules/
+auth_session/
+mydata/
+contacts.xlsx
+contacts_to_message.xlsx
+contacts_to_message copy.xlsx
+contacts copy.xlsx
+~$*
+.DS_Store

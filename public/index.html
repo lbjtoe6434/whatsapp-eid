@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WhatsApp Bulk Sender</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --green: #25D366; --dark-green: #128C7E; --teal: #075E54;
+      --light-green: #DCF8C6; --bg: #0b141a; --panel: #111b21;
+      --card: #1f2c33; --border: #2a3942; --text: #e9edef;
+      --text-dim: #8696a0; --input-bg: #2a3942; --danger: #ef4444;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    .header { background: var(--teal); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+    .header h1 { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+    .header h1 svg { width: 28px; height: 28px; fill: white; }
+    .header-right { display: flex; align-items: center; gap: 12px; }
+
+    .status-badge { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 500; }
+    .status-badge.connected { background: rgba(37,211,102,0.2); color: var(--green); }
+    .status-badge.disconnected { background: rgba(239,68,68,0.2); color: var(--danger); }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; animation: pulse 2s infinite; }
+    .connected .status-dot { background: var(--green); }
+    .disconnected .status-dot { background: var(--danger); }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+    .lang-toggle { display: inline-flex; background: rgba(255,255,255,0.15); border-radius: 8px; overflow: hidden; }
+    .lang-btn { padding: 5px 12px; border: none; background: transparent; color: rgba(255,255,255,0.6); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .lang-btn.active { background: rgba(255,255,255,0.25); color: white; }
+
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+    .steps { display: flex; gap: 8px; margin-bottom: 24px; overflow-x: auto; padding-bottom: 4px; }
+    .step-btn { padding: 10px 20px; border: 1px solid var(--border); background: var(--card); color: var(--text-dim); border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 500; white-space: nowrap; transition: all 0.2s; }
+    .step-btn:hover { border-color: var(--dark-green); color: var(--text); }
+    .step-btn.active { background: var(--dark-green); color: white; border-color: var(--dark-green); }
+    .step-btn .num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(255,255,255,0.15); font-size: 12px; margin-inline-end: 6px; }
+
+    .panel { display: none; background: var(--panel); border-radius: 12px; border: 1px solid var(--border); padding: 24px; }
+    .panel.active { display: block; }
+    .panel-title { font-size: 18px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+
+    #qr-panel { text-align: center; }
+    #qr-img { max-width: 300px; border-radius: 12px; margin: 20px auto; display: block; background: white; padding: 16px; }
+    .qr-instructions { color: var(--text-dim); font-size: 14px; line-height: 1.8; max-width: 400px; margin: 0 auto; }
+    .qr-instructions b { color: var(--text); }
+    .sync-status { margin-top: 16px; padding: 12px 20px; background: var(--card); border-radius: 8px; display: inline-block; font-size: 14px; }
+
+    .btn { padding: 10px 18px; border: none; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px; }
+    .btn-primary { background: var(--dark-green); color: white; }
+    .btn-primary:hover { background: var(--green); }
+    .btn-secondary { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { border-color: var(--text-dim); }
+    .btn-danger { background: var(--danger); color: white; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .toolbar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+    .search-box { flex: 1; min-width: 200px; padding: 10px 14px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 14px; outline: none; }
+    .search-box:focus { border-color: var(--dark-green); }
+    .search-box::placeholder { color: var(--text-dim); }
+    .contact-count { font-size: 13px; color: var(--text-dim); padding: 8px 0; }
+    .contact-count b { color: var(--green); }
+
+    .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); max-height: 500px; overflow-y: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    thead { position: sticky; top: 0; z-index: 10; }
+    th { background: var(--card); padding: 10px 14px; text-align: start; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); border-bottom: 1px solid var(--border); }
+    td { padding: 8px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:hover td { background: rgba(37,211,102,0.05); }
+    tr.excluded td { opacity: 0.35; }
+
+    .toggle-include { width: 40px; height: 22px; border-radius: 11px; border: none; cursor: pointer; position: relative; transition: background 0.2s; }
+    .toggle-include.on { background: var(--green); }
+    .toggle-include.off { background: var(--input-bg); }
+    .toggle-include::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%; background: white; top: 3px; transition: all 0.2s; }
+    .toggle-include.on::after { inset-inline-start: 21px; }
+    .toggle-include.off::after { inset-inline-start: 3px; }
+
+    .custom-name-input { background: var(--input-bg); border: 1px solid transparent; color: var(--text); padding: 6px 10px; border-radius: 6px; font-size: 14px; width: 100%; min-width: 120px; outline: none; }
+    .custom-name-input:focus { border-color: var(--green); }
+    .custom-name-input::placeholder { color: var(--text-dim); }
+
+    /* Template Cards */
+    .template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin: 16px 0; }
+    .template-card { background: var(--card); border: 2px solid var(--border); border-radius: 10px; padding: 14px; cursor: pointer; transition: all 0.2s; position: relative; }
+    .template-card:hover { border-color: var(--dark-green); }
+    .template-card.selected { border-color: var(--green); background: rgba(37,211,102,0.08); }
+    .template-card .card-tag { display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 8px; border-radius: 4px; background: rgba(37,211,102,0.15); color: var(--green); margin-bottom: 8px; }
+    .template-card .card-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+    .template-card .card-preview { font-size: 12px; color: var(--text-dim); line-height: 1.5; white-space: pre-wrap; max-height: 80px; overflow: hidden; }
+    .template-card .card-check { position: absolute; top: 10px; inset-inline-end: 10px; width: 22px; height: 22px; border-radius: 50%; background: var(--green); color: white; display: none; align-items: center; justify-content: center; font-size: 12px; }
+    .template-card.selected .card-check { display: flex; }
+
+    /* Message Area */
+    .template-area { width: 100%; min-height: 180px; padding: 16px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 15px; font-family: inherit; line-height: 1.7; outline: none; resize: vertical; }
+    .template-area:focus { border-color: var(--green); }
+    .template-hint { font-size: 12px; color: var(--text-dim); margin-top: 8px; }
+
+    .preview-box { margin-top: 16px; background: var(--card); border-radius: 12px; padding: 16px; border: 1px solid var(--border); }
+    .preview-label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+    .preview-bubble { background: var(--light-green); color: #111; padding: 10px 14px; border-radius: 0 8px 8px 8px; display: inline-block; max-width: 80%; white-space: pre-wrap; line-height: 1.6; font-size: 14px; }
+
+    /* Image Gallery */
+    .img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin: 12px 0; }
+    .img-card { background: var(--card); border: 2px solid var(--border); border-radius: 10px; cursor: pointer; transition: all 0.2s; overflow: hidden; position: relative; aspect-ratio: 1; }
+    .img-card:hover { border-color: var(--dark-green); transform: scale(1.03); }
+    .img-card.selected { border-color: var(--green); box-shadow: 0 0 12px rgba(37,211,102,0.3); }
+    .img-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .img-card .img-label { position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.7); color: white; font-size: 10px; padding: 3px 6px; text-align: center; }
+    .img-card .img-check { position: absolute; top: 6px; inset-inline-end: 6px; width: 22px; height: 22px; border-radius: 50%; background: var(--green); color: white; display: none; align-items: center; justify-content: center; font-size: 13px; font-weight: bold; }
+    .img-card.selected .img-check { display: flex; }
+    .img-card-none { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 11px; }
+    .img-card-none span { font-size: 24px; }
+
+    /* Send */
+    .send-summary { background: var(--card); border-radius: 10px; padding: 20px; margin-bottom: 20px; border: 1px solid var(--border); }
+    .send-summary h3 { font-size: 15px; margin-bottom: 12px; color: var(--text-dim); }
+    .stat-row { display: flex; gap: 20px; flex-wrap: wrap; }
+    .stat { text-align: center; padding: 12px 20px; }
+    .stat .num { font-size: 32px; font-weight: 700; color: var(--green); }
+    .stat .label { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+    .progress-wrap { margin: 20px 0; display: none; }
+    .progress-wrap.active { display: block; }
+    .progress-bar-bg { height: 8px; background: var(--input-bg); border-radius: 4px; overflow: hidden; }
+    .progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--dark-green), var(--green)); border-radius: 4px; transition: width 0.3s; width: 0%; }
+    .progress-text { display: flex; justify-content: space-between; margin-top: 8px; font-size: 13px; color: var(--text-dim); }
+    .progress-text b { color: var(--green); }
+
+    .log-box { margin-top: 16px; background: var(--card); border-radius: 8px; padding: 12px; max-height: 300px; overflow-y: auto; font-size: 13px; font-family: 'SF Mono', Monaco, monospace; border: 1px solid var(--border); }
+    .log-entry { padding: 4px 0; border-bottom: 1px solid var(--border); }
+    .log-entry:last-child { border: none; }
+    .log-entry.success { color: var(--green); }
+    .log-entry.error { color: var(--danger); }
+
+    .test-section { margin-top: 20px; padding: 16px; background: var(--card); border-radius: 10px; border: 1px solid var(--border); }
+    .test-section h3 { font-size: 14px; margin-bottom: 12px; }
+    .test-select { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 14px; outline: none; width: 100%; max-width: 300px; }
+
+    .footer { text-align: center; padding: 24px; color: var(--text-dim); font-size: 12px; }
+    .footer a { color: var(--green); text-decoration: none; }
+
+    @media (max-width: 640px) { .container { padding: 12px; } .panel { padding: 16px; } .toolbar { flex-direction: column; } .search-box { width: 100%; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>
+      <svg viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+      <span data-i18n="title">مرسل رسائل واتساب</span>
+    </h1>
+    <div class="header-right">
+      <div class="lang-toggle">
+        <button class="lang-btn active" id="lang-ar" onclick="setLang('ar')">عربي</button>
+        <button class="lang-btn" id="lang-en" onclick="setLang('en')">EN</button>
+      </div>
+      <div id="status-badge" class="status-badge disconnected">
+        <div class="status-dot"></div>
+        <span id="status-text" data-i18n="disconnected">غير متصل</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="steps">
+      <button class="step-btn active" onclick="showStep(1)"><span class="num">1</span> <span data-i18n="step_connect">الاتصال</span></button>
+      <button class="step-btn" onclick="showStep(2)"><span class="num">2</span> <span data-i18n="step_contacts">جهات الاتصال</span></button>
+      <button class="step-btn" onclick="showStep(3)"><span class="num">3</span> <span data-i18n="step_message">الرسالة</span></button>
+      <button class="step-btn" onclick="showStep(4)"><span class="num">4</span> <span data-i18n="step_send">الإرسال</span></button>
+    </div>
+
+    <!-- Step 1 -->
+    <div id="step-1" class="panel active">
+      <div id="qr-panel">
+        <div class="panel-title">📱 <span data-i18n="connect_title">اربط حساب واتساب</span></div>
+        <div id="qr-container">
+          <div id="qr-waiting" class="sync-status" data-i18n="qr_waiting">في انتظار رمز QR...</div>
+          <img id="qr-img" style="display:none" alt="QR Code" />
+        </div>
+        <div class="qr-instructions" id="qr-instructions">
+          <b>1.</b> افتح واتساب على جوالك<br/>
+          <b>2.</b> اضغط <b>القائمة ⋮</b> ← <b>الأجهزة المرتبطة</b><br/>
+          <b>3.</b> اضغط <b>ربط جهاز</b><br/>
+          <b>4.</b> امسح رمز QR
+        </div>
+        <div id="connected-msg" style="display:none">
+          <div class="sync-status" style="background:rgba(37,211,102,0.15); color:var(--green);">
+            ✅ <span data-i18n="connected_syncing">متصل! جاري مزامنة جهات الاتصال...</span>
+            <div id="sync-count" style="margin-top:6px; font-size:13px;"></div>
+          </div>
+          <br/>
+          <button class="btn btn-primary" onclick="loadContacts()" data-i18n="load_contacts_btn">تحميل جهات الاتصال →</button>
+          <button class="btn btn-danger btn-sm" onclick="logout()" style="margin-inline-start:8px;" data-i18n="logout_btn">تسجيل خروج</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2 -->
+    <div id="step-2" class="panel">
+      <div class="panel-title">👥 <span data-i18n="contacts_title">اختر جهات الاتصال وسمّهم</span></div>
+      <div class="toolbar">
+        <input class="search-box" type="text" id="search" data-i18n-ph="search_placeholder" placeholder="🔍 ابحث بالاسم أو رقم الجوال..." oninput="renderContacts()" />
+        <button class="btn btn-secondary btn-sm" onclick="toggleAll(true)" data-i18n="include_all">تضمين الكل</button>
+        <button class="btn btn-secondary btn-sm" onclick="toggleAll(false)" data-i18n="exclude_all">استثناء الكل</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportExcel()">📥 <span data-i18n="export_excel">تصدير Excel</span></button>
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer;">
+          📤 <span data-i18n="import_excel">استيراد Excel</span>
+          <input type="file" accept=".xlsx,.xls" onchange="importExcel(event)" style="display:none" />
+        </label>
+      </div>
+      <div class="contact-count" id="contact-count"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:60px" data-i18n="th_include">تضمين</th>
+              <th style="width:50px">#</th>
+              <th data-i18n="th_phone">الجوال</th>
+              <th data-i18n="th_name">الاسم</th>
+              <th data-i18n="th_custom_name">اسمك له</th>
+            </tr>
+          </thead>
+          <tbody id="contact-tbody"></tbody>
+        </table>
+      </div>
+      <br/>
+      <button class="btn btn-primary" onclick="goToMessage()" data-i18n="next_message">التالي: كتابة الرسالة →</button>
+    </div>
+
+    <!-- Step 3 -->
+    <div id="step-3" class="panel">
+      <div class="panel-title" style="margin-bottom:8px;">✍️ <span data-i18n="message_title">قالب الرسالة</span></div>
+      <div style="font-size:13px; color:var(--text-dim); margin-bottom:12px;" data-i18n="pick_template">اختر قالب جاهز أو اكتب رسالتك:</div>
+
+      <div class="template-grid" id="template-grid"></div>
+
+      <div style="font-size:13px; color:var(--text-dim); margin:16px 0 8px;" data-i18n="or_edit">أو عدّل الرسالة يدويًا:</div>
+      <textarea class="template-area" id="template" oninput="deselectCards(); saveTemplate(); updatePreview();"></textarea>
+      <div class="template-hint" data-i18n="template_hint">استخدم <b>{{name}}</b> في المكان الذي تريد أن يظهر فيه الاسم.</div>
+
+      <!-- Image Section -->
+      <div style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border);">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+          <span style="font-size:14px; font-weight:600;" data-i18n="attach_image">🖼️ إرفاق صورة (اختياري)</span>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <label class="btn btn-secondary btn-sm" style="cursor:pointer;">
+              📤 <span data-i18n="upload_custom">رفع صورة</span>
+              <input type="file" accept="image/*" onchange="attachImage(event)" style="display:none" />
+            </label>
+            <button class="btn btn-danger btn-sm" id="img-remove" style="display:none;" onclick="removeImage()" data-i18n="remove_img">✕ إزالة</button>
+          </div>
+        </div>
+        <div class="img-grid" id="image-gallery"></div>
+        <div id="img-selected-wrap" style="display:none; margin-top:12px; text-align:center;">
+          <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;" data-i18n="selected_image">الصورة المختارة:</div>
+          <img id="img-preview" style="max-width:200px; max-height:200px; border-radius:8px; border:1px solid var(--border);" />
+        </div>
+      </div>
+
+      <div class="preview-box">
+        <div class="preview-label" data-i18n="preview">معاينة</div>
+        <div class="preview-bubble" id="preview-bubble"></div>
+      </div>
+      <br/>
+      <button class="btn btn-primary" onclick="goToSend()" data-i18n="next_send">التالي: مراجعة وإرسال →</button>
+    </div>
+
+    <!-- Step 4 -->
+    <div id="step-4" class="panel">
+      <div class="send-summary">
+        <h3>📊 <span data-i18n="summary">الملخص</span></h3>
+        <div class="stat-row">
+          <div class="stat"><div class="num" id="stat-total">0</div><div class="label" data-i18n="total_recipients">إجمالي المستلمين</div></div>
+          <div class="stat"><div class="num" id="stat-named">0</div><div class="label" data-i18n="with_name">باسم مخصص</div></div>
+          <div class="stat"><div class="num" id="stat-unnamed">0</div><div class="label" data-i18n="without_name">بدون اسم (يتم تخطيهم)</div></div>
+        </div>
+      </div>
+
+      <div class="test-section">
+        <h3>🧪 <span data-i18n="test_first">أرسل رسالة تجريبية أولاً</span></h3>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <select class="test-select" id="test-select"></select>
+          <button class="btn btn-secondary btn-sm" onclick="sendTest()" data-i18n="send_test">إرسال تجريبي</button>
+        </div>
+        <div id="test-result" style="margin-top:8px; font-size:13px;"></div>
+      </div>
+
+      <div style="margin-top:20px;">
+        <button class="btn btn-primary" id="send-all-btn" onclick="sendAll()">🚀 <span data-i18n="send_all">إرسال للجميع</span></button>
+        <button class="btn btn-danger btn-sm" id="stop-btn" style="display:none; margin-inline-start:8px;" onclick="stopSending=true;" data-i18n="stop">⏹ إيقاف</button>
+      </div>
+
+      <div class="progress-wrap" id="progress-wrap">
+        <div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-fill"></div></div>
+        <div class="progress-text">
+          <span><b id="progress-sent">0</b> <span data-i18n="sent">تم إرسالها</span></span>
+          <span id="progress-current"></span>
+          <span><b id="progress-pct">0%</b></span>
+        </div>
+      </div>
+      <div class="log-box" id="log-box" style="display:none;"></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Built with ❤️ using <a href="https://github.com/WhiskeySockets/Baileys" target="_blank">Baileys</a>
+  </div>
+
+<script>
+const socket = io();
+
+// ═══════════════════════════════
+// i18n
+// ═══════════════════════════════
+const I18N = {
+  ar: {
+    title: "مرسل رسائل واتساب",
+    connected: "متصل", disconnected: "غير متصل",
+    step_connect: "الاتصال", step_contacts: "جهات الاتصال", step_message: "الرسالة", step_send: "الإرسال",
+    connect_title: "اربط حساب واتساب", qr_waiting: "في انتظار رمز QR...",
+    qr_instructions: '<b>1.</b> افتح واتساب على جوالك<br/><b>2.</b> اضغط <b>القائمة ⋮</b> ← <b>الأجهزة المرتبطة</b><br/><b>3.</b> اضغط <b>ربط جهاز</b><br/><b>4.</b> امسح رمز QR',
+    connected_syncing: "متصل! جاري مزامنة جهات الاتصال...",
+    load_contacts_btn: "تحميل جهات الاتصال →", logout_btn: "تسجيل خروج",
+    contacts_title: "اختر جهات الاتصال وسمّهم",
+    search_placeholder: "🔍 ابحث بالاسم أو رقم الجوال...",
+    include_all: "تضمين الكل", exclude_all: "استثناء الكل",
+    export_excel: "تصدير Excel", import_excel: "استيراد Excel",
+    th_include: "تضمين", th_phone: "الجوال", th_name: "الاسم", th_custom_name: "اسمك له",
+    custom_name_ph: "كيف تناديه...",
+    next_message: "التالي: كتابة الرسالة →",
+    contact_count: (shown, total, inc, named) => `عرض <b>${shown}</b> من ${total} جهة اتصال · <b>${inc}</b> مضمنة · <b>${named}</b> مسماة`,
+    message_title: "قالب الرسالة",
+    pick_template: "اختر قالب جاهز أو اكتب رسالتك:",
+    or_edit: "أو عدّل الرسالة يدويًا:",
+    template_hint: 'استخدم <b>{{name}}</b> في المكان الذي تريد أن يظهر فيه الاسم.',
+    attach_image: "🖼️ إرفاق صورة (اختياري)", upload_custom: "رفع صورة", remove_img: "✕ إزالة",
+    no_image: "بدون صورة", selected_image: "الصورة المختارة:",
+    preview: "معاينة", next_send: "التالي: مراجعة وإرسال →",
+    summary: "الملخص", total_recipients: "إجمالي المستلمين", with_name: "باسم مخصص", without_name: "بدون اسم (يتم تخطيهم)",
+    test_first: "أرسل رسالة تجريبية أولاً", send_test: "إرسال تجريبي",
+    send_all: "إرسال للجميع", stop: "⏹ إيقاف", sent: "تم إرسالها",
+    loading: "جاري التحميل...", syncing: (s) => `جاري المزامنة... (${s} ثانية)`,
+    no_contacts: "لم يتم العثور على جهات اتصال. انتظر قليلاً وحاول مرة أخرى.",
+    imported: (n) => `تم الاستيراد! تم تحديث ${n} جهة اتصال.`,
+    test_sent: (name) => `✅ تم الإرسال التجريبي لـ ${name}!`,
+    send_confirm: (n) => `إرسال لـ ${n} جهة اتصال؟`,
+    no_named: "لا يوجد جهات اتصال بأسماء مخصصة!",
+    done: (s, f) => `تم! ${s} تم إرسالها، ${f} فشلت.`,
+    stopped: (s) => `⏹ تم الإيقاف بعد إرسال ${s}.`,
+    synced: (n) => `تم مزامنة ${n} جهة اتصال`,
+  },
+  en: {
+    title: "WhatsApp Bulk Sender",
+    connected: "Connected", disconnected: "Disconnected",
+    step_connect: "Connect", step_contacts: "Contacts", step_message: "Message", step_send: "Send",
+    connect_title: "Connect your WhatsApp", qr_waiting: "Waiting for QR code...",
+    qr_instructions: '<b>1.</b> Open WhatsApp on your phone<br/><b>2.</b> Tap <b>Menu ⋮</b> → <b>Linked Devices</b><br/><b>3.</b> Tap <b>Link a Device</b><br/><b>4.</b> Scan this QR code',
+    connected_syncing: "Connected! Syncing contacts...",
+    load_contacts_btn: "Load Contacts →", logout_btn: "Logout",
+    contacts_title: "Select Contacts & Name Them",
+    search_placeholder: "🔍 Search by name or phone...",
+    include_all: "Include All", exclude_all: "Exclude All",
+    export_excel: "Export Excel", import_excel: "Import Excel",
+    th_include: "Include", th_phone: "Phone", th_name: "Name", th_custom_name: "Custom Name",
+    custom_name_ph: "How you call them...",
+    next_message: "Next: Write Message →",
+    contact_count: (shown, total, inc, named) => `Showing <b>${shown}</b> of ${total} contacts · <b>${inc}</b> included · <b>${named}</b> named`,
+    message_title: "Message Template",
+    pick_template: "Pick a ready template or write your own:",
+    or_edit: "Or edit the message manually:",
+    template_hint: 'Use <b>{{name}}</b> where you want the custom name to appear.',
+    attach_image: "🖼️ Attach Image (optional)", upload_custom: "Upload Image", remove_img: "✕ Remove",
+    no_image: "No Image", selected_image: "Selected image:",
+    preview: "Preview", next_send: "Next: Review & Send →",
+    summary: "Summary", total_recipients: "Total Recipients", with_name: "With Custom Name", without_name: "Without Name (skipped)",
+    test_first: "Send a Test Message First", send_test: "Send Test",
+    send_all: "Send to All", stop: "⏹ Stop", sent: "sent",
+    loading: "Loading...", syncing: (s) => `Syncing... (${s}s)`,
+    no_contacts: "No contacts found yet. Wait a bit and try again.",
+    imported: (n) => `Imported! Updated ${n} contacts.`,
+    test_sent: (name) => `✅ Test sent to ${name}!`,
+    send_confirm: (n) => `Send to ${n} contacts?`,
+    no_named: "No contacts with custom names!",
+    done: (s, f) => `Done! ${s} sent, ${f} failed.`,
+    stopped: (s) => `⏹ Stopped after sending ${s}.`,
+    synced: (n) => `${n} contacts synced`,
+  },
+};
+
+// ═══════════════════════════════
+// Templates — ALL about عيد الفطر
+// ═══════════════════════════════
+const TEMPLATES = {
+  ar: [
+    { tag: "عيد الفطر", title: "تهنئة رسمية", text: "السلام عليكم {{name}}\nكل عام وأنتم بخير\nعيدكم مبارك\nتقبل الله صيامكم وقيامكم وأعاده الله علينا وعليكم أعوامًا عديدة في صحة وسلامة وسعادة وأمن وأمان" },
+    { tag: "عيد الفطر", title: "تهنئة قصيرة", text: "السلام عليكم {{name}}\nعيدكم مبارك وتقبل الله منا ومنكم\nكل عام وأنت بخير" },
+    { tag: "عيد الفطر", title: "تهنئة حارة", text: "يا هلا {{name}} 🌙\nعيدك مبارك وعساك من عواده\nالله يتقبل صيامك وقيامك ويعيده عليك بالصحة والعافية\nوحشتني والله" },
+    { tag: "عيد الفطر", title: "تهنئة بدعاء", text: "السلام عليكم ورحمة الله وبركاته {{name}}\nأهنئك بحلول عيد الفطر المبارك\nأسأل الله أن يتقبل منا ومنكم صالح الأعمال\nوأن يعيده علينا وعليكم بالخير واليمن والبركات\nعيدكم مبارك" },
+    { tag: "عيد الفطر", title: "تهنئة عائلية", text: "{{name}} الغالي/ة\nكل عام وأنت وأهلك بألف خير\nعيدكم مبارك وتقبل الله طاعاتكم\nالله يجمعنا دايم على خير" },
+    { tag: "عيد الفطر", title: "تهنئة ودية", text: "عيدك مبارك يا {{name}} 🎉\nكل سنة وأنت طيب\nالله يديم عليك الصحة والسعادة\nوعساك من عواده يا رب" },
+    { tag: "عيد الفطر", title: "تهنئة مع شوق", text: "السلام عليكم {{name}}\nعيدكم مبارك وكل عام وأنتم بخير\nتقبل الله صيامكم وقيامكم\nوحشتني والله وإن شاء الله نجتمع قريب\nعساكم من عواده" },
+    { tag: "عيد الفطر", title: "تهنئة مختصرة", text: "{{name}}\nعيدكم مبارك 🌙\nكل عام وأنتم بخير" },
+  ],
+  en: [
+    { tag: "Eid Al-Fitr", title: "Formal Greeting", text: "Assalamu Alaikum {{name}},\nEid Mubarak!\nMay Allah accept your fasting and prayers, and may this blessed occasion bring you and your family joy, health, and prosperity." },
+    { tag: "Eid Al-Fitr", title: "Short & Sweet", text: "Eid Mubarak {{name}}!\nMay Allah accept from us and from you.\nWishing you a wonderful Eid!" },
+    { tag: "Eid Al-Fitr", title: "Warm Greeting", text: "Hey {{name}}! 🌙\nEid Mubarak!\nHope this Eid brings you endless blessings, happiness, and beautiful moments with your loved ones." },
+    { tag: "Eid Al-Fitr", title: "With Dua", text: "Assalamu Alaikum {{name}},\nOn this blessed day of Eid Al-Fitr, I pray that Allah accepts all our good deeds and grants us peace, health, and happiness.\nEid Mubarak!" },
+    { tag: "Eid Al-Fitr", title: "Family Greeting", text: "Dear {{name}},\nEid Mubarak to you and your wonderful family!\nMay Allah bless you all with joy, health, and togetherness.\nHave a beautiful Eid!" },
+    { tag: "Eid Al-Fitr", title: "Friendly", text: "Eid Mubarak {{name}}! 🎉\nHope you have an amazing celebration!\nMay this Eid bring you all the happiness you deserve." },
+    { tag: "Eid Al-Fitr", title: "Miss You", text: "Eid Mubarak {{name}}!\nMay Allah accept your fasting and prayers.\nI really miss you and hope we can get together soon!\nHave a blessed Eid!" },
+    { tag: "Eid Al-Fitr", title: "Simple", text: "{{name}},\nEid Mubarak! 🌙\nWishing you a joyful and blessed Eid." },
+  ],
+};
+
+// Gallery images
+const GALLERY_IMAGES = [
+  { file: "/images/img-1.jpg", ar: "عيدكم مبارك (ورود)", en: "Eid Mubarak (Flowers)" },
+  { file: "/images/img-3.jpg", ar: "عيدكم مبارك (وردي)", en: "Eid Mubarak (Pink)" },
+  { file: "/images/img-5.jpg", ar: "عيدكم مبارك (أنيق)", en: "Eid Mubarak (Elegant)" },
+  { file: "/images/img-6.jpg", ar: "عيد الفطر المبارك", en: "Eid Al-Fitr Card" },
+  { file: "/images/img-7.jpg", ar: "عيد سعيد (ملون)", en: "Happy Eid (Colorful)" },
+  { file: "/images/img-8.jpg", ar: "عيدكم مبارك (بسيط)", en: "Eid Mubarak (Minimal)" },
+  { file: "/images/img-9.jpg", ar: "كل عام وأنتم بخير", en: "Every Year Blessings" },
+  { file: "/images/img-2.jpg", ar: "عيدكم مبارك 1", en: "Eid Mubarak 1" },
+  { file: "/images/img-4.jpg", ar: "عيد عيدكم مبارك 🐹", en: "Eid Mubarak 2 🐹" },
+];
+
+// ═══════════════════════════════
+// LocalStorage
+// ═══════════════════════════════
+const LS = {
+  get(k, fb) { try { const v = localStorage.getItem("wa_"+k); return v ? JSON.parse(v) : fb; } catch { return fb; } },
+  set(k, v) { localStorage.setItem("wa_"+k, JSON.stringify(v)); },
+  remove(k) { localStorage.removeItem("wa_"+k); },
+};
+
+let contacts = LS.get("contacts", []);
+let currentLang = LS.get("lang", "ar");
+let selectedCardIdx = -1;
+let attachedImageBase64 = LS.get("image", null);
+let selectedGalleryIdx = LS.get("galleryIdx", -1);
+let stopSending = false;
+
+function t(key) { return I18N[currentLang][key] || key; }
+function saveContacts() { LS.set("contacts", contacts); }
+function saveTemplate() { LS.set("template", document.getElementById("template").value); }
+
+// ═══════════════════════════════
+// Language
+// ═══════════════════════════════
+function setLang(lang) {
+  currentLang = lang;
+  LS.set("lang", lang);
+
+  document.documentElement.lang = lang;
+  document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+
+  document.getElementById("lang-ar").classList.toggle("active", lang === "ar");
+  document.getElementById("lang-en").classList.toggle("active", lang === "en");
+
+  // Update all data-i18n elements
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const key = el.dataset.i18n;
+    if (I18N[lang][key] && typeof I18N[lang][key] === "string") {
+      if (el.querySelector("b")) el.innerHTML = I18N[lang][key];
+      else el.textContent = I18N[lang][key];
+    }
+  });
+
+  // Update placeholders
+  document.querySelectorAll("[data-i18n-ph]").forEach(el => {
+    const key = el.dataset.i18nPh;
+    if (I18N[lang][key]) el.placeholder = I18N[lang][key];
+  });
+
+  // QR instructions (has HTML)
+  document.getElementById("qr-instructions").innerHTML = I18N[lang].qr_instructions;
+
+  // Template hint (has HTML)
+  document.querySelector(".template-hint").innerHTML = I18N[lang].template_hint;
+
+  // Textarea direction
+  const ta = document.getElementById("template");
+  ta.style.direction = lang === "ar" ? "rtl" : "ltr";
+  ta.style.textAlign = lang === "ar" ? "right" : "left";
+
+  // Preview bubble direction
+  const bubble = document.getElementById("preview-bubble");
+  bubble.style.direction = lang === "ar" ? "rtl" : "ltr";
+  bubble.style.textAlign = lang === "ar" ? "right" : "left";
+
+  selectedCardIdx = -1;
+  renderTemplateCards();
+  renderGallery();
+  if (contacts.length > 0) renderContacts();
+  updatePreview();
+}
+
+// ═══════════════════════════════
+// Socket Events
+// ═══════════════════════════════
+socket.on("qr", (dataUrl) => {
+  document.getElementById("qr-waiting").style.display = "none";
+  document.getElementById("qr-img").src = dataUrl;
+  document.getElementById("qr-img").style.display = "block";
+  document.getElementById("connected-msg").style.display = "none";
+});
+
+socket.on("status", ({ connected }) => {
+  const badge = document.getElementById("status-badge");
+  const text = document.getElementById("status-text");
+  if (connected) {
+    badge.className = "status-badge connected";
+    text.textContent = t("connected");
+    document.getElementById("qr-img").style.display = "none";
+    document.getElementById("qr-waiting").style.display = "none";
+    document.getElementById("connected-msg").style.display = "block";
+  } else {
+    badge.className = "status-badge disconnected";
+    text.textContent = t("disconnected");
+  }
+});
+
+socket.on("sync-progress", ({ count, done }) => {
+  document.getElementById("sync-count").textContent = t("synced")(count) + (done ? " ✓" : "...");
+});
+
+// Check status on load
+fetch("/api/status").then(r => r.json()).then(data => {
+  if (data.connected) {
+    document.getElementById("status-badge").className = "status-badge connected";
+    document.getElementById("status-text").textContent = t("connected");
+    document.getElementById("qr-img").style.display = "none";
+    document.getElementById("qr-waiting").style.display = "none";
+    document.getElementById("connected-msg").style.display = "block";
+    document.getElementById("sync-count").textContent = t("synced")(data.contacts);
+  }
+});
+
+// ═══════════════════════════════
+// Steps
+// ═══════════════════════════════
+function showStep(n) {
+  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".step-btn").forEach(b => b.classList.remove("active"));
+  document.getElementById("step-" + n).classList.add("active");
+  document.querySelectorAll(".step-btn")[n - 1].classList.add("active");
+  // Refresh data when navigating to each step
+  if (n === 2 && contacts.length > 0) renderContacts();
+  if (n === 3) { renderTemplateCards(); updatePreview(); }
+  if (n === 4) refreshSendStep();
+}
+
+// ═══════════════════════════════
+// Step 1: Connect
+// ═══════════════════════════════
+async function loadContacts() {
+  const btn = document.querySelector('#connected-msg .btn-primary');
+  btn.disabled = true;
+  btn.textContent = t("loading");
+
+  // Wait up to 60 seconds for sync (matching CLI version's 30s wait + extra buffer)
+  let attempts = 0, data, lastCount = 0, stableCount = 0;
+  while (attempts < 24) {
+    const r = await fetch("/api/contacts");
+    data = await r.json();
+
+    const sec = ((attempts + 1) * 2.5).toFixed(0);
+    btn.textContent = `${t("syncing")(sec)} — ${data.total}`;
+
+    // Wait for contacts to stabilize (same count for 2 consecutive checks)
+    if (data.total > 0 && data.total === lastCount) {
+      stableCount++;
+      if (stableCount >= 2) break; // contacts stopped growing, sync is done
+    } else {
+      stableCount = 0;
+    }
+    lastCount = data.total;
+
+    attempts++;
+    await new Promise(r => setTimeout(r, 2500));
+  }
+
+  if (!data || data.total === 0) {
+    btn.disabled = false;
+    btn.textContent = t("load_contacts_btn");
+    alert(t("no_contacts"));
+    return;
+  }
+
+  const existing = {};
+  contacts.forEach(c => { existing[c.chat_id] = c; });
+
+  contacts = data.contacts.map(c => ({
+    phone: c.phone, name: c.name, chat_id: c.chat_id,
+    custom_name: existing[c.chat_id]?.custom_name || "",
+    included: existing[c.chat_id] != null ? existing[c.chat_id].included : true,
+  }));
+
+  saveContacts();
+  renderContacts();
+  btn.disabled = false;
+  btn.textContent = t("load_contacts_btn");
+  showStep(2);
+}
+
+function logout() {
+  if (!confirm("Logout?")) return;
+  fetch("/api/logout", { method: "POST" }).then(() => { LS.remove("contacts"); LS.remove("template"); location.reload(); });
+}
+
+// ═══════════════════════════════
+// Step 2: Contacts
+// ═══════════════════════════════
+function renderContacts() {
+  const q = document.getElementById("search").value.toLowerCase();
+  const tbody = document.getElementById("contact-tbody");
+  const filtered = contacts.filter(c =>
+    !q || c.name.toLowerCase().includes(q) || c.phone.includes(q) || (c.custom_name||"").toLowerCase().includes(q)
+  );
+  const included = contacts.filter(c => c.included).length;
+  const named = contacts.filter(c => c.included && c.custom_name).length;
+  document.getElementById("contact-count").innerHTML = t("contact_count")(filtered.length, contacts.length, included, named);
+
+  tbody.innerHTML = filtered.map(c => {
+    const idx = contacts.indexOf(c);
+    return `<tr class="${c.included ? '' : 'excluded'}">
+      <td><button class="toggle-include ${c.included ? 'on' : 'off'}" onclick="toggleInclude(${idx})"></button></td>
+      <td style="color:var(--text-dim)">${idx + 1}</td>
+      <td style="font-family:monospace; font-size:13px;">${c.phone}</td>
+      <td>${c.name || '<span style="color:var(--text-dim)">—</span>'}</td>
+      <td><input class="custom-name-input" value="${escHtml(c.custom_name||'')}" placeholder="${t('custom_name_ph')}" onchange="setCustomName(${idx}, this.value)" /></td>
+    </tr>`;
+  }).join("");
+}
+
+function escHtml(s) { return s.replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
+function toggleInclude(i) { contacts[i].included = !contacts[i].included; saveContacts(); renderContacts(); }
+function toggleAll(v) { contacts.forEach(c => c.included = v); saveContacts(); renderContacts(); }
+function setCustomName(i, v) { contacts[i].custom_name = v.trim(); saveContacts(); }
+
+function exportExcel() {
+  const rows = contacts.filter(c => c.included).map((c,i) => ({ "#": i+1, phone: c.phone, name: c.name, chat_id: c.chat_id, custom_name: c.custom_name || "" }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws["!cols"] = [{ wch:5 },{ wch:18 },{ wch:25 },{ wch:35 },{ wch:22 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Contacts");
+  XLSX.writeFile(wb, "contacts.xlsx");
+}
+
+function importExcel(e) {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(evt) {
+    const wb = XLSX.read(new Uint8Array(evt.target.result), { type: "array" });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+    const lookup = {};
+    rows.forEach(r => { const k = r.chat_id || (r.phone+"@s.whatsapp.net"); lookup[k] = { custom_name: r.custom_name ? String(r.custom_name).trim() : "", included: r.include ? String(r.include).trim().toUpperCase() !== "NO" : true }; });
+    let merged = 0;
+    contacts.forEach(c => { const m = lookup[c.chat_id]; if (m) { if (m.custom_name) c.custom_name = m.custom_name; c.included = m.included; merged++; } });
+    saveContacts(); renderContacts();
+    alert(t("imported")(merged));
+  };
+  reader.readAsArrayBuffer(file);
+  e.target.value = "";
+}
+
+// ═══════════════════════════════
+// Step 3: Templates
+// ═══════════════════════════════
+function goToMessage() { updatePreview(); showStep(3); }
+
+function renderTemplateCards() {
+  const grid = document.getElementById("template-grid");
+  const templates = TEMPLATES[currentLang];
+  const dir = currentLang === "ar" ? "rtl" : "ltr";
+  const align = currentLang === "ar" ? "right" : "left";
+  grid.innerHTML = templates.map((t, i) => `
+    <div class="template-card ${i === selectedCardIdx ? 'selected' : ''}" onclick="selectTemplate(${i})" style="direction:${dir}; text-align:${align};">
+      <div class="card-check">✓</div>
+      <div class="card-tag">${t.tag}</div>
+      <div class="card-title">${t.title}</div>
+      <div class="card-preview">${t.text.replace(/\{\{name\}\}/g, '___')}</div>
+    </div>
+  `).join("");
+}
+
+function selectTemplate(i) {
+  selectedCardIdx = i;
+  document.getElementById("template").value = TEMPLATES[currentLang][i].text;
+  saveTemplate(); updatePreview(); renderTemplateCards();
+}
+
+function deselectCards() { selectedCardIdx = -1; renderTemplateCards(); }
+
+function updatePreview() {
+  const tpl = document.getElementById("template").value;
+  const firstNamed = contacts.find(c => c.included && c.custom_name);
+  const name = firstNamed ? firstNamed.custom_name : (currentLang === "ar" ? "محمد" : "Mohammed");
+  document.getElementById("preview-bubble").textContent = tpl.replace(/\{\{name\}\}/g, name);
+}
+
+// ═══════════════════════════════
+// Image Gallery
+// ═══════════════════════════════
+function renderGallery() {
+  const grid = document.getElementById("image-gallery");
+  let html = `<div class="img-card img-card-none ${selectedGalleryIdx === -1 ? 'selected' : ''}" onclick="selectGallery(-1)">
+    <div class="img-check">✓</div><span>🚫</span>${t("no_image")}</div>`;
+  GALLERY_IMAGES.forEach((img, i) => {
+    html += `<div class="img-card ${selectedGalleryIdx === i ? 'selected' : ''}" onclick="selectGallery(${i})">
+      <div class="img-check">✓</div>
+      <img src="${img.file}" alt="${img[currentLang]}" onerror="this.parentElement.style.display='none'" />
+      <div class="img-label">${img[currentLang]}</div>
+    </div>`;
+  });
+  grid.innerHTML = html;
+}
+
+async function selectGallery(idx) {
+  selectedGalleryIdx = idx; LS.set("galleryIdx", idx);
+  if (idx === -1) { attachedImageBase64 = null; LS.remove("image"); hidePreview(); }
+  else {
+    try {
+      const resp = await fetch(GALLERY_IMAGES[idx].file);
+      const blob = await resp.blob();
+      const reader = new FileReader();
+      reader.onload = () => { attachedImageBase64 = reader.result; LS.set("image", attachedImageBase64); showImagePreview(GALLERY_IMAGES[idx][currentLang]); };
+      reader.readAsDataURL(blob);
+    } catch { alert("Could not load image."); return; }
+  }
+  renderGallery();
+}
+
+function attachImage(e) {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(evt) {
+    attachedImageBase64 = evt.target.result; LS.set("image", attachedImageBase64);
+    selectedGalleryIdx = -2; LS.set("galleryIdx", -2);
+    showImagePreview(file.name); renderGallery();
+  };
+  reader.readAsDataURL(file); e.target.value = "";
+}
+
+function showImagePreview(name) {
+  document.getElementById("img-preview").src = attachedImageBase64;
+  document.getElementById("img-selected-wrap").style.display = "block";
+  document.getElementById("img-remove").style.display = "inline-flex";
+}
+
+function hidePreview() {
+  document.getElementById("img-selected-wrap").style.display = "none";
+  document.getElementById("img-remove").style.display = "none";
+}
+
+function removeImage() {
+  attachedImageBase64 = null; selectedGalleryIdx = -1;
+  LS.remove("image"); LS.set("galleryIdx", -1);
+  hidePreview(); renderGallery();
+}
+
+// ═══════════════════════════════
+// Step 4: Send
+// ═══════════════════════════════
+// Get the display name: custom_name first, fall back to fetched name
+function getDisplayName(c) {
+  return (c.custom_name || c.name || c.phone || "").trim();
+}
+
+function refreshSendStep() {
+  // Include contacts that have either custom_name OR a fetched name
+  const included = contacts.filter(c => c.included);
+  const withName = included.filter(c => getDisplayName(c));
+  const noName = included.filter(c => !getDisplayName(c));
+  document.getElementById("stat-total").textContent = withName.length;
+  document.getElementById("stat-named").textContent = included.filter(c => c.custom_name).length;
+  document.getElementById("stat-unnamed").textContent = noName.length;
+  const sel = document.getElementById("test-select");
+  sel.innerHTML = withName.map(c => `<option value="${c.chat_id}">${getDisplayName(c)} (${c.phone})</option>`).join("");
+}
+
+function goToSend() { showStep(4); }
+
+async function sendTest() {
+  const sel = document.getElementById("test-select");
+  const contact = contacts.find(c => c.chat_id === sel.value);
+  const tpl = document.getElementById("template").value;
+  const name = getDisplayName(contact);
+  const message = tpl.replace(/\{\{name\}\}/g, name);
+  document.getElementById("test-result").textContent = "...";
+  try {
+    const r = await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: contact.chat_id, message, image: attachedImageBase64 }) });
+    const data = await r.json();
+    document.getElementById("test-result").innerHTML = data.ok
+      ? `<span style="color:var(--green)">${t("test_sent")(name)}</span>`
+      : `<span style="color:var(--danger)">❌ ${data.error}</span>`;
+  } catch(e) { document.getElementById("test-result").innerHTML = `<span style="color:var(--danger)">❌ ${e.message}</span>`; }
+}
+
+async function sendAll() {
+  const ready = contacts.filter(c => c.included && getDisplayName(c));
+  if (ready.length === 0) return alert(t("no_named"));
+  if (!confirm(t("send_confirm")(ready.length))) return;
+
+  stopSending = false;
+  document.getElementById("send-all-btn").disabled = true;
+  document.getElementById("stop-btn").style.display = "inline-flex";
+  document.getElementById("progress-wrap").classList.add("active");
+  document.getElementById("log-box").style.display = "block";
+  document.getElementById("log-box").innerHTML = "";
+
+  const tpl = document.getElementById("template").value;
+  let sent = 0, failed = 0;
+
+  for (const contact of ready) {
+    if (stopSending) { addLog(t("stopped")(sent), "error"); break; }
+    const message = tpl.replace(/\{\{name\}\}/g, contact.custom_name);
+    try {
+      const r = await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: contact.chat_id, message, image: attachedImageBase64 }) });
+      const data = await r.json();
+      if (data.ok) { sent++; addLog(`✓ ${contact.custom_name} (${contact.phone}) — ${sent}/${ready.length}`, "success"); }
+      else { failed++; addLog(`✗ ${contact.custom_name} — ${data.error}`, "error"); }
+    } catch(e) { failed++; addLog(`✗ ${contact.custom_name} — ${e.message}`, "error"); }
+
+    const pct = Math.round(((sent+failed)/ready.length)*100);
+    document.getElementById("progress-fill").style.width = pct + "%";
+    document.getElementById("progress-sent").textContent = sent;
+    document.getElementById("progress-pct").textContent = pct + "%";
+    document.getElementById("progress-current").textContent = contact.custom_name;
+
+    if (!stopSending) await new Promise(r => setTimeout(r, 3000 + Math.random() * 5000));
+  }
+
+  addLog(`══ ${t("done")(sent, failed)} ══`, "success");
+  document.getElementById("send-all-btn").disabled = false;
+  document.getElementById("stop-btn").style.display = "none";
+  document.getElementById("progress-current").textContent = t("done")(sent, failed);
+}
+
+function addLog(text, cls) {
+  const box = document.getElementById("log-box");
+  const el = document.createElement("div");
+  el.className = "log-entry " + cls;
+  el.textContent = text;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+}
+
+// ═══════════════════════════════
+// Init
+// ═══════════════════════════════
+setLang(currentLang);
+
+// Restore saved template
+const savedTpl = LS.get("template", null);
+if (savedTpl) document.getElementById("template").value = savedTpl;
+else document.getElementById("template").value = TEMPLATES[currentLang][0].text;
+
+// Restore image
+if (attachedImageBase64 && selectedGalleryIdx !== -1) showImagePreview();
+renderGallery();
+
+if (contacts.length > 0) renderContacts();
+updatePreview();
+</script>
+</body>
+</html>
