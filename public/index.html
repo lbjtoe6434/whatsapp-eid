@@ -309,7 +309,9 @@
   </div>
 
   <div class="footer">
-    Built with ❤️ using <a href="https://github.com/WhiskeySockets/Baileys" target="_blank">Baileys</a>
+    Built by <a href="https://x.com/LubbadRayan" target="_blank">Rayan Lubbad</a>
+    · <a href="https://github.com/rayl999/whatsapp" target="_blank">GitHub</a>
+    · Powered by <a href="https://github.com/WhiskeySockets/Baileys" target="_blank">Baileys</a>
   </div>
 
 <script>
@@ -822,19 +824,20 @@ async function sendAll() {
 
   for (const contact of ready) {
     if (stopSending) { addLog(t("stopped")(sent), "error"); break; }
-    const message = tpl.replace(/\{\{name\}\}/g, contact.custom_name);
+    const displayName = getDisplayName(contact);
+    const message = tpl.replace(/\{\{name\}\}/g, displayName);
     try {
       const r = await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: contact.chat_id, message, image: attachedImageBase64 }) });
       const data = await r.json();
-      if (data.ok) { sent++; addLog(`✓ ${contact.custom_name} (${contact.phone}) — ${sent}/${ready.length}`, "success"); }
-      else { failed++; addLog(`✗ ${contact.custom_name} — ${data.error}`, "error"); }
-    } catch(e) { failed++; addLog(`✗ ${contact.custom_name} — ${e.message}`, "error"); }
+      if (data.ok) { sent++; addLog(`✓ ${displayName} (${contact.phone}) — ${sent}/${ready.length}`, "success"); }
+      else { failed++; addLog(`✗ ${displayName} — ${data.error}`, "error"); }
+    } catch(e) { failed++; addLog(`✗ ${displayName} — ${e.message}`, "error"); }
 
     const pct = Math.round(((sent+failed)/ready.length)*100);
     document.getElementById("progress-fill").style.width = pct + "%";
     document.getElementById("progress-sent").textContent = sent;
     document.getElementById("progress-pct").textContent = pct + "%";
-    document.getElementById("progress-current").textContent = contact.custom_name;
+    document.getElementById("progress-current").textContent = displayName;
 
     if (!stopSending) await new Promise(r => setTimeout(r, 3000 + Math.random() * 5000));
   }
