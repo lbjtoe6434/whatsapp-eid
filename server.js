@@ -5,6 +5,7 @@ const QRCode = require("qrcode");
 const path = require("path");
 const fs = require("fs");
 const pino = require("pino");
+const crypto = require("crypto");
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -16,24 +17,65 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 const PORT = process.env.PORT || 3000;
+const AUTH_DIR = path.join(__dirname, "auth_sessions");
 
 app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json({ limit: "10mb" }));
 
-let sock = null;
-let isConnected = false;
-const contactsMap = new Map();
-let historyDone = false;
-let lastQR = null; // cache QR so late-connecting browsers get it
+// ──────────────────────────────
+// Multi-user session store
+// Each user gets a unique sessionId stored in their browser
+// ──────────────────────────────
+const sessions = new Map(); // sessionId -> { sock, isConnected, contactsMap, historyDone, lastQR }
+
+function getSession(sessionId) {
+  return sessions.get(sessionId);
+}
+
+function createSession(sessionId) {
+  if (!sessions.has(sessionId)) {
+    sessions.set(sessionId, {
+      sock: null,
+      isConnected: false,
+      contactsMap: new Map(),
+      historyDone: false,
+      lastQR: null,
+    });
+  }
+  return sessions.get(sessionId);
+}
+
+// Clean up idle sessions after 2 hours
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, session] of sessions) {
+    if (session.lastActivity && now - session.lastActivity > 2 * 60 * 60 * 1000) {
+      console.log(`[cleanup] Removing idle session ${id}`);
+      try { if (session.sock) session.sock.end(); } catch {}
+      sessions.delete(id);
+    }
+  }
+}, 10 * 60 * 1000);
 
 // ──────────────────────────────
-// WhatsApp Connection
+// WhatsApp Connection (per user)
 // ──────────────────────────────
-async function connectWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState("auth_session");
+async function connectWhatsApp(sessionId, socket) {
+  const session = createSession(sessionId);
+  session.lastActivity = Date.now();
+
+  const sessionDir = path.join(AUTH_DIR, sessionId);
+  fs.mkdirSync(sessionDir, { recursive: true });
+
+  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
   const { version } = await fetchLatestBaileysVersion();
 
-  sock = makeWASocket({
+  // Close existing connection if any
+  if (session.sock) {
+    try { session.sock.end(); } catch {}
+  }
+
+  const sock = makeWASocket({
     version,
     auth: state,
     printQRInTerminal: false,
@@ -41,14 +83,16 @@ async function connectWhatsApp() {
     syncFullHistory: true,
   });
 
+  session.sock = sock;
+
   sock.ev.on("creds.update", saveCreds);
 
   function getOrCreate(jid) {
-    if (!contactsMap.has(jid)) {
+    if (!session.contactsMap.has(jid)) {
       const phone = jid.replace("@s.whatsapp.net", "");
-      contactsMap.set(jid, { phone, saved_name: "", whatsapp_name: "", chat_id: jid, last_msg: 0 });
+      session.contactsMap.set(jid, { phone, saved_name: "", whatsapp_name: "", chat_id: jid, last_msg: 0 });
     }
-    return contactsMap.get(jid);
+    return session.contactsMap.get(jid);
   }
 
   function addChat(jid, opts = {}) {
@@ -82,16 +126,15 @@ async function connectWhatsApp() {
   }
 
   function emitProgress() {
-    io.emit("sync-progress", { count: contactsMap.size, done: historyDone });
+    socket.emit("sync-progress", { count: session.contactsMap.size, done: session.historyDone });
   }
 
-  // Listen to ALL events — with try/catch so nothing silently breaks
   sock.ev.on("messaging-history.set", (data) => {
     try {
-      console.log(`[history.set] ${data?.chats?.length || 0} chats, ${data?.contacts?.length || 0} contacts, isLatest=${data?.isLatest}`);
+      console.log(`[${sessionId.slice(0,8)}] history.set: ${data?.chats?.length || 0} chats, ${data?.contacts?.length || 0} contacts`);
       processChats(data?.chats);
       processContacts(data?.contacts);
-      if (data?.isLatest) historyDone = true;
+      if (data?.isLatest) session.historyDone = true;
       emitProgress();
     } catch (e) { console.error("[history.set] ERROR:", e.message); }
   });
@@ -99,7 +142,6 @@ async function connectWhatsApp() {
   sock.ev.on("chats.upsert", (data) => {
     try {
       const chats = Array.isArray(data) ? data : data?.chats || [];
-      console.log(`[chats.upsert] ${chats.length} chats`);
       processChats(chats);
       emitProgress();
     } catch (e) { console.error("[chats.upsert] ERROR:", e.message); }
@@ -108,7 +150,6 @@ async function connectWhatsApp() {
   sock.ev.on("chats.set", (data) => {
     try {
       const chats = Array.isArray(data) ? data : data?.chats || [];
-      console.log(`[chats.set] ${chats.length} chats`);
       processChats(chats);
       emitProgress();
     } catch (e) { console.error("[chats.set] ERROR:", e.message); }
@@ -117,7 +158,6 @@ async function connectWhatsApp() {
   sock.ev.on("contacts.upsert", (data) => {
     try {
       const contacts = Array.isArray(data) ? data : data?.contacts || [];
-      console.log(`[contacts.upsert] ${contacts.length} contacts`);
       processContacts(contacts);
       emitProgress();
     } catch (e) { console.error("[contacts.upsert] ERROR:", e.message); }
@@ -126,7 +166,6 @@ async function connectWhatsApp() {
   sock.ev.on("contacts.set", (data) => {
     try {
       const contacts = Array.isArray(data) ? data : data?.contacts || [];
-      console.log(`[contacts.set] ${contacts.length} contacts`);
       processContacts(contacts);
       emitProgress();
     } catch (e) { console.error("[contacts.set] ERROR:", e.message); }
@@ -148,92 +187,100 @@ async function connectWhatsApp() {
 
     if (qr) {
       const qrDataUrl = await QRCode.toDataURL(qr, { width: 300 });
-      lastQR = qrDataUrl;
-      io.emit("qr", qrDataUrl);
-      console.log("[QR] New QR code generated — scan it in the browser");
+      session.lastQR = qrDataUrl;
+      socket.emit("qr", qrDataUrl);
+      console.log(`[${sessionId.slice(0,8)}] QR generated`);
     }
 
     if (connection === "close") {
-      isConnected = false;
-      io.emit("status", { connected: false });
+      session.isConnected = false;
+      socket.emit("status", { connected: false });
       const code = lastDisconnect?.error?.output?.statusCode;
       if (code !== DisconnectReason.loggedOut) {
-        setTimeout(() => connectWhatsApp(), 3000);
+        setTimeout(() => {
+          connectWhatsApp(sessionId, socket).catch(err => {
+            console.error(`[${sessionId.slice(0,8)}] Reconnect failed:`, err.message);
+          });
+        }, 3000);
       } else {
-        io.emit("logged-out");
+        socket.emit("logged-out");
       }
     }
 
     if (connection === "open") {
-      isConnected = true;
-      lastQR = null;
-      console.log("[connection] OPEN — waiting for sync events...");
-      io.emit("status", { connected: true });
+      session.isConnected = true;
+      session.lastQR = null;
+      console.log(`[${sessionId.slice(0,8)}] CONNECTED — syncing...`);
+      socket.emit("status", { connected: true });
 
-      // Wait for sync like the working CLI version does
       for (let i = 0; i < 6; i++) {
         await new Promise((r) => setTimeout(r, 5000));
-        console.log(`  ... ${contactsMap.size} contacts so far (${(i + 1) * 5}s)`);
-        if (historyDone && contactsMap.size > 0) break;
+        console.log(`  [${sessionId.slice(0,8)}] ${session.contactsMap.size} contacts (${(i+1)*5}s)`);
+        if (session.historyDone && session.contactsMap.size > 0) break;
       }
-      console.log(`[sync done] Total: ${contactsMap.size} contacts`);
+      console.log(`[${sessionId.slice(0,8)}] Sync done: ${session.contactsMap.size} contacts`);
       emitProgress();
     }
   });
 }
 
 // ──────────────────────────────
-// API Routes (stateless — no file I/O)
+// API Routes — all session-aware
 // ──────────────────────────────
-
-// Get synced contacts from WhatsApp
 app.get("/api/contacts", (req, res) => {
-  const sorted = Array.from(contactsMap.values()).sort((a, b) => b.last_msg - a.last_msg);
+  const sid = req.query.sid;
+  const session = sid && getSession(sid);
+  if (!session) return res.json({ contacts: [], total: 0, connected: false });
+
+  session.lastActivity = Date.now();
+  const sorted = Array.from(session.contactsMap.values()).sort((a, b) => b.last_msg - a.last_msg);
   const contacts = sorted.map((c, i) => ({
     id: i + 1,
     phone: c.phone,
     name: c.saved_name || c.whatsapp_name || "",
     chat_id: c.chat_id,
   }));
-  console.log(`[API] Returning ${contacts.length} contacts`);
-  res.json({ contacts, total: contacts.length, connected: isConnected });
+  res.json({ contacts, total: contacts.length, connected: session.isConnected });
 });
 
-// Connection status
 app.get("/api/status", (req, res) => {
-  res.json({ connected: isConnected, contacts: contactsMap.size, synced: historyDone });
+  const sid = req.query.sid;
+  const session = sid && getSession(sid);
+  if (!session) return res.json({ connected: false, contacts: 0, synced: false });
+  res.json({ connected: session.isConnected, contacts: session.contactsMap.size, synced: session.historyDone });
 });
 
-// Logout
 app.post("/api/logout", async (req, res) => {
+  const sid = req.body.sid;
+  const session = sid && getSession(sid);
+  if (!session) return res.json({ ok: true });
+
   try {
-    if (sock) await sock.logout();
-    fs.rmSync("auth_session", { recursive: true, force: true });
-    contactsMap.clear();
-    historyDone = false;
-    isConnected = false;
+    if (session.sock) await session.sock.logout();
+    const sessionDir = path.join(AUTH_DIR, sid);
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+    sessions.delete(sid);
     res.json({ ok: true });
-    setTimeout(() => connectWhatsApp(), 1000);
   } catch (e) {
     res.json({ ok: false, error: e.message });
   }
 });
 
-// Send single message (text or image+caption)
 app.post("/api/send", async (req, res) => {
-  const { chatId, message, image } = req.body;
-  if (!isConnected || !sock) return res.status(400).json({ error: "Not connected" });
+  const { sid, chatId, message, image } = req.body;
+  const session = sid && getSession(sid);
+  if (!session || !session.isConnected || !session.sock) {
+    return res.status(400).json({ error: "Not connected" });
+  }
+
+  session.lastActivity = Date.now();
   try {
     if (image) {
-      // image is a base64 data URL like "data:image/png;base64,..."
       const base64Data = image.split(",")[1];
       const buffer = Buffer.from(base64Data, "base64");
-      await sock.sendMessage(chatId, {
-        image: buffer,
-        caption: message,
-      });
+      await session.sock.sendMessage(chatId, { image: buffer, caption: message });
     } else {
-      await sock.sendMessage(chatId, { text: message });
+      await session.sock.sendMessage(chatId, { text: message });
     }
     res.json({ ok: true });
   } catch (e) {
@@ -241,14 +288,52 @@ app.post("/api/send", async (req, res) => {
   }
 });
 
-// Send cached QR to browsers that connect late
+// Health check for Cloud Run
+app.get("/healthz", (req, res) => res.status(200).send("ok"));
+
+// ──────────────────────────────
+// Socket.IO — per-user sessions
+// ──────────────────────────────
 io.on("connection", (socket) => {
-  if (lastQR && !isConnected) socket.emit("qr", lastQR);
-  if (isConnected) socket.emit("status", { connected: true });
+  console.log(`[socket] New browser connected: ${socket.id}`);
+
+  // Browser sends its sessionId (from localStorage)
+  socket.on("init", async ({ sessionId }) => {
+    if (!sessionId) return;
+    console.log(`[socket] Init session ${sessionId.slice(0,8)}`);
+
+    const session = getSession(sessionId);
+    if (session) {
+      // Existing session — send current state
+      if (session.lastQR && !session.isConnected) socket.emit("qr", session.lastQR);
+      if (session.isConnected) {
+        socket.emit("status", { connected: true });
+        socket.emit("sync-progress", { count: session.contactsMap.size, done: session.historyDone });
+      }
+    }
+  });
+
+  // Browser requests WhatsApp connection
+  socket.on("connect-wa", async ({ sessionId }) => {
+    if (!sessionId) return;
+    console.log(`[socket] Connecting WA for ${sessionId.slice(0,8)}`);
+    try {
+      await connectWhatsApp(sessionId, socket);
+    } catch (err) {
+      console.error(`[${sessionId.slice(0,8)}] Connect failed:`, err.message);
+      socket.emit("error", { message: err.message });
+    }
+  });
+
+  socket.on("disconnect", () => {
+    console.log(`[socket] Browser disconnected: ${socket.id}`);
+  });
 });
 
 // ──────────────────────────────
+fs.mkdirSync(AUTH_DIR, { recursive: true });
+
 server.listen(PORT, () => {
-  console.log(`\n🚀 WhatsApp Bulk Sender running at http://localhost:${PORT}\n`);
-  connectWhatsApp();
+  console.log(`\n🚀 WhatsApp Bulk Sender running on port ${PORT}`);
+  console.log(`   Multi-user mode — each browser gets its own session\n`);
 });

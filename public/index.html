@@ -326,6 +326,19 @@
 const socket = io();
 
 // ═══════════════════════════════
+// Session ID — unique per browser
+// ═══════════════════════════════
+function getSessionId() {
+  let sid = localStorage.getItem("wa_session_id");
+  if (!sid) {
+    sid = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
+    localStorage.setItem("wa_session_id", sid);
+  }
+  return sid;
+}
+const SESSION_ID = getSessionId();
+
+// ═══════════════════════════════
 // i18n
 // ═══════════════════════════════
 const I18N = {
@@ -542,16 +555,26 @@ socket.on("sync-progress", ({ count, done }) => {
   document.getElementById("sync-count").textContent = t("synced")(count) + (done ? " ✓" : "...");
 });
 
-// Check status on load
-fetch("/api/status").then(r => r.json()).then(data => {
-  if (data.connected) {
-    document.getElementById("status-badge").className = "status-badge connected";
-    document.getElementById("status-text").textContent = t("connected");
-    document.getElementById("qr-img").style.display = "none";
-    document.getElementById("qr-waiting").style.display = "none";
-    document.getElementById("connected-msg").style.display = "block";
-    document.getElementById("sync-count").textContent = t("synced")(data.contacts);
-  }
+// Tell server who we are on socket connect
+socket.on("connect", () => {
+  socket.emit("init", { sessionId: SESSION_ID });
+});
+
+// Also tell server to start WhatsApp on first visit
+socket.on("connect", () => {
+  fetch(`/api/status?sid=${SESSION_ID}`).then(r => r.json()).then(data => {
+    if (data.connected) {
+      document.getElementById("status-badge").className = "status-badge connected";
+      document.getElementById("status-text").textContent = t("connected");
+      document.getElementById("qr-img").style.display = "none";
+      document.getElementById("qr-waiting").style.display = "none";
+      document.getElementById("connected-msg").style.display = "block";
+      document.getElementById("sync-count").textContent = t("synced")(data.contacts);
+    } else {
+      // Start WhatsApp connection for this user
+      socket.emit("connect-wa", { sessionId: SESSION_ID });
+    }
+  });
 });
 
 // ═══════════════════════════════
@@ -579,7 +602,7 @@ async function loadContacts() {
   // Wait up to 60 seconds for sync (matching CLI version's 30s wait + extra buffer)
   let attempts = 0, data, lastCount = 0, stableCount = 0;
   while (attempts < 24) {
-    const r = await fetch("/api/contacts");
+    const r = await fetch(`/api/contacts?sid=${SESSION_ID}`);
     data = await r.json();
 
     const sec = ((attempts + 1) * 2.5).toFixed(0);
@@ -623,7 +646,7 @@ async function loadContacts() {
 
 function logout() {
   if (!confirm("Logout?")) return;
-  fetch("/api/logout", { method: "POST" }).then(() => { LS.remove("contacts"); LS.remove("template"); location.reload(); });
+  fetch("/api/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: SESSION_ID }) }).then(() => { LS.remove("contacts"); LS.remove("template"); localStorage.removeItem("wa_session_id"); location.reload(); });
 }
 
 // ═══════════════════════════════
@@ -807,7 +830,7 @@ async function sendTest() {
   const message = tpl.replace(/\{\{name\}\}/g, name);
   document.getElementById("test-result").textContent = "...";
   try {
-    const r = await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: contact.chat_id, message, image: attachedImageBase64 }) });
+    const r = await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: SESSION_ID, chatId: contact.chat_id, message, image: attachedImageBase64 }) });
     const data = await r.json();
     document.getElementById("test-result").innerHTML = data.ok
       ? `<span style="color:var(--green)">${t("test_sent")(name)}</span>`
@@ -835,7 +858,7 @@ async function sendAll() {
     const displayName = getDisplayName(contact);
     const message = tpl.replace(/\{\{name\}\}/g, displayName);
     try {
-      const r = await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: contact.chat_id, message, image: attachedImageBase64 }) });
+      const r = await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sid: SESSION_ID, chatId: contact.chat_id, message, image: attachedImageBase64 }) });
       const data = await r.json();
       if (data.ok) { sent++; addLog(`✓ ${displayName} (${contact.phone}) — ${sent}/${ready.length}`, "success"); }
       else { failed++; addLog(`✗ ${displayName} — ${data.error}`, "error"); }
